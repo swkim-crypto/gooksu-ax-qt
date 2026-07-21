@@ -130,7 +130,13 @@ async function toggleLayer(ly, on) {
           style: typeof styler === "function" ? styler : () => styler,
           pointToLayer: (f, latlng) =>
             L.circleMarker(latlng, typeof styler === "function" ? styler(f) : styler),
-          onEachFeature: (f, l) => { const t = featureText(f); if (t) l.bindPopup(t); },
+          onEachFeature: (f, l) => {
+            const t = featureText(f); if (t) l.bindPopup(t);
+            if (ly.id === "equipment") l.on("click", () => {
+              const key = (f.properties.tag || "").split(" ")[0] || f.properties.label;
+              showAssetCard(key);
+            });
+          },
         });
       }
       leafletLayers[ly.id].addTo(map);
@@ -163,8 +169,13 @@ function buildKakao(gj, id) {
       kakao.maps.event.addListener(pg, "click", (e) => showKakaoInfo(e.latLng, text));
       objs.push(pg);
     } else if (g.type === "Point") {
-      objs.push(kakaoDot(g.coordinates[0], g.coordinates[1], st,
-        DOT_PX[id] || 9, text, id === "equipment" ? 15 : 10));
+      const ov = kakaoDot(g.coordinates[0], g.coordinates[1], st,
+        DOT_PX[id] || 9, text, id === "equipment" ? 15 : 10);
+      if (id === "equipment") {
+        const key = (f.properties.tag || "").split(" ")[0] || f.properties.label;
+        ov.getContent().addEventListener("click", () => showAssetCard(key));
+      }
+      objs.push(ov);
     }
   }
   return objs;
@@ -222,14 +233,9 @@ function drawHighlights(features) {
 }
 
 /* ---------- AI 질의 ---------- */
-async function onAsk(e) {
-  e.preventDefault();
-  const input = document.getElementById("chat-input");
-  const q = input.value.trim();
-  if (!q) return;
-  input.value = "";
+async function ask(q) {
   addMsg("user", q);
-  const btn = e.target.querySelector("button");
+  const btn = document.querySelector("#chat-form button");
   btn.disabled = true;
   try {
     const r = await (await fetch("/api/query", {
@@ -242,6 +248,79 @@ async function onAsk(e) {
     addMsg("bot", "질의 실패: " + err);
   }
   btn.disabled = false;
+}
+
+function onAsk(e) {
+  e.preventDefault();
+  const input = document.getElementById("chat-input");
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = "";
+  ask(q);
+}
+
+/* ---------- 장비 종합 카드 (노드/점 클릭 → AI 패널) ---------- */
+async function showAssetCard(key) {
+  try {
+    const resp = await fetch("/api/asset_card", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }),
+    });
+    const c = await resp.json();
+    if (!resp.ok) { addMsg("bot", c.error || "카드 조회 실패"); return; }
+    renderAssetCard(c);
+    if (c.coord) drawHighlights([{ kind: "point", coord: c.coord, label: c.label }]);
+  } catch (err) {
+    addMsg("bot", "카드 조회 실패: " + err);
+  }
+}
+
+function renderAssetCard(c) {
+  const log = document.getElementById("chat-log");
+  const d = document.createElement("div");
+  d.className = "msg bot asset-card";
+  const rows = [];
+  rows.push(`<div class="ac-head">${c.label}${c.tag ? ` <b>[${c.tag}]</b>` : ""}</div>`);
+  if (c.sysl) rows.push(`<div>계통: ${c.sysl}</div>`);
+  if (c.spec) rows.push(`<div>사양: ${c.spec}</div>`);
+  if (c.qty) rows.push(`<div>수량: ${c.qty}</div>`);
+  if (c.kw) rows.push(`<div>동력: ${c.kw} kW</div>`);
+  if (c.status) rows.push(`<div>검증상태: ${c.status}</div>`);
+  const fi = (c.feeds_in || []).map(r => r.al).join(", ");
+  const fo = (c.feeds_out || []).map(r => r.bl + (r.m ? `[${r.m}]` : "")).join(", ");
+  if (fi) rows.push(`<div>← 유입: ${fi}</div>`);
+  if (fo) rows.push(`<div>→ 유출: ${fo}</div>`);
+  if (c.iso_sheets && c.iso_sheets.length) {
+    const sh = c.iso_sheets.map(s => s.no).join(", ");
+    rows.push(`<div>아이소시트: ${sh}</div>`);
+  }
+  if (c.pipe_summary) {
+    const p = c.pipe_summary;
+    const len = p.len ? `${Math.round(+p.len)}m` : "-";
+    const wt = p.wt ? `${Math.round(+p.wt)}kg` : "-";
+    rows.push(`<div>관련 배관: ${p.n}항목, 연장 ${len}, 중량 ${wt}</div>`);
+  }
+  if (!c.coord) rows.push(`<div class="ac-dim">(실좌표 미보유 — 지도 표시 불가)</div>`);
+  d.innerHTML = rows.join("");
+
+  // 추천 질문 버튼 — 클릭 = AI 질의 자동 실행
+  const key = c.tag ? c.tag.split(" ")[0] : c.label;
+  const sugg = [
+    [`배관 물량`, `${key} 배관 물량`],
+    [`고장 시 하류 영향`, `${c.label} 정지하면 하류 영향 범위는?`],
+    [`소속 계통`, `${c.label}은 어느 계통이야?`],
+  ];
+  const bar = document.createElement("div");
+  bar.className = "ac-suggest";
+  for (const [lbl, q] of sugg) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = lbl;
+    b.onclick = () => ask(q);
+    bar.appendChild(b);
+  }
+  d.appendChild(bar);
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
 }
 
 function addMsg(cls, text) {
@@ -432,6 +511,7 @@ function renderGraph() {
     if (d.kind === "system") t += `  (계통)`;
     if (d.kind === "pumpstation") t += `  (중계펌프장)`;
     document.getElementById("cy-tip").textContent = t;
+    if (d.kind === "asset") showAssetCard(d.id);   // 클릭 = 종합 카드 질의
   });
   cy.on("tap", evt => {
     if (evt.target === cy) { cy.elements().removeClass("hl dim");

@@ -298,6 +298,58 @@ class GuksuEngine:
             lines += [f"  - {p}" for p in ps]
         return "중계펌프장 펌프·전원 계통:\n" + "\n".join(lines), rows, sp
 
+    def q_downstream(self, text):
+        """장비 고장/정지 시 하류 영향 범위 — feeds+ 경로 탐색."""
+        uri, a = self._find_asset(text)
+        if not uri:
+            return None
+        sp = f"""SELECT DISTINCT ?b ?bl ?sysl WHERE {{
+            <{uri}> ax:feeds+ ?b . ?b rdfs:label ?bl .
+            OPTIONAL {{ ?b ax:partOf ?s . ?s rdfs:label ?sysl }} }}"""
+        rows = self._run(sp)
+        if not rows:
+            return (f"{a['label']}({a['tag']})의 하류(feeds) 객체가 그래프에 없습니다. "
+                    f"흐름 체인의 말단이거나 계통도 미편입 구간일 수 있습니다."), [], sp
+        lines = [f"- {r['bl']}" + (f" ({r['sysl']})" if r.get("sysl") else "") for r in rows]
+        ans = (f"{a['label']}({a['tag']}) 정지 시 하류 영향 범위 — {len(rows)}개 객체:\n"
+               + "\n".join(lines)
+               + "\n\n※ 위상(feeds) 기준 도달 범위입니다. 우회 계열·예비기 여부는 별도 확인 필요.")
+        pairs = [(uri, a["label"], r["b"], r["bl"], None) for r in rows]
+        feats = self._edge_features(pairs)
+        return ans, rows, sp, feats
+
+    # ---------- 태그 종합 카드 (노드 클릭용) ----------
+    def asset_card(self, key):
+        """URI/태그/라벨 → 장비 종합 카드 JSON.
+        기본정보 + 소속계통 + 직접 흐름(in/out) + 아이소시트 + 배관물량 합 + 좌표."""
+        uri, a = (key, self.assets.get(key)) if key in self.assets else self._find_asset(key)
+        if not uri:
+            return None
+        card = {"uri": uri, "label": a["label"], "tag": a["tag"]}
+        r = self._run(f"""SELECT ?spec ?qty ?kw ?sysl ?status WHERE {{
+            OPTIONAL {{ <{uri}> ax:spec ?spec }} OPTIONAL {{ <{uri}> ax:quantity ?qty }}
+            OPTIONAL {{ <{uri}> ax:powerKW ?kw }} OPTIONAL {{ <{uri}> ax:tagStatus ?status }}
+            OPTIONAL {{ <{uri}> ax:partOf ?s . ?s rdfs:label ?sysl }} }}""")
+        if r:
+            card.update({k: v for k, v in r[0].items() if v})
+        card["feeds_out"] = self._run(f"""SELECT ?bl ?m WHERE {{
+            <{uri}> ax:feeds ?b . ?b rdfs:label ?bl .
+            OPTIONAL {{ <{uri}> ax:conveys ?m }} }}""")
+        card["feeds_in"] = self._run(f"""SELECT ?al ?m WHERE {{
+            ?x ax:feeds <{uri}> ; rdfs:label ?al .
+            OPTIONAL {{ ?x ax:conveys ?m }} }}""")
+        card["iso_sheets"] = self._run(f"""SELECT ?no ?title WHERE {{
+            ?iso ax:referencesAsset <{uri}> ; ax:sheetNo ?no .
+            OPTIONAL {{ ?iso ax:sheetTitle ?title }} }} ORDER BY ?no""")
+        qsum = self._run(f"""SELECT (SUM(?t) AS ?len) (SUM(?w) AS ?wt) (COUNT(?q) AS ?n) WHERE {{
+            ?iso ax:referencesAsset <{uri}> . ?q ax:derivedFrom ?iso .
+            OPTIONAL {{ ?q ax:qtyTotal ?t }} OPTIONAL {{ ?q ax:weight ?w }} }}""")
+        if qsum and qsum[0].get("n") and int(qsum[0]["n"]):
+            card["pipe_summary"] = qsum[0]
+        if uri in self.coords:
+            card["coord"] = self.coords[uri]
+        return card
+
     # ---------- 관계 시각화 데이터 ----------
     def graph_data(self):
         """공정 흐름도/계통 트리/물량 오버레이 공용 그래프 JSON."""
@@ -384,6 +436,7 @@ class GuksuEngine:
         (r"계통별|계통 현황|장비.*(몇|수|현황)", "q_system_counts"),
         (r"어느 계통|무슨 계통|소속", "q_asset_system"),
         (r"약품|주입", "q_chemical"),
+        (r"하류|영향|고장|멈추|정지.*(영향|하류|범위)", "q_downstream"),
         (r"흐름|체인|경로|순서", "q_flow_chain"),
         (r"[A-Z]{1,2}P?-\d{3}.*(도면|문서|뭐|무엇|내용)|도면.*[A-Z]{1,2}P?-\d{3}", "q_drawing"),
         (r"좌표|위치.*(보유|객체)|실좌표", "q_coords"),

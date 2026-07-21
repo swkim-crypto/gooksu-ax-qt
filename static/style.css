@@ -49,6 +49,16 @@ html, body, #app { height: 100%; font-family: "Pretendard", "Malgun Gothic", san
 #chat-form button:disabled { opacity: .5; }
 
 /* 카카오 점 오버레이 & 정보창 */
+.asset-card { border-left: 3px solid #ab47bc; }
+.asset-card .ac-head { font-size: 13px; margin-bottom: 4px; }
+.asset-card div { line-height: 1.5; }
+.asset-card .ac-dim { color: #999; font-size: 11px; }
+.ac-suggest { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.ac-suggest button {
+  font-size: 11px; padding: 3px 8px; border: 1px solid #b39ddb;
+  background: #f3e5f5; color: #4a148c; border-radius: 12px; cursor: pointer;
+}
+.ac-suggest button:hover { background: #e1bee7; }
 .kk-dot { border-radius: 50%; cursor: pointer; box-shadow: 0 0 2px rgba(0,0,0,.5); }
 .kk-info { background: #fff; border: 1px solid #666; border-radius: 6px; padding: 5px 9px;
   font-size: 12px; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.3); }

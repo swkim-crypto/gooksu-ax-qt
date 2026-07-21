@@ -61,6 +61,18 @@ def graph():
     return jsonify(engine.graph_data())
 
 
+@app.route("/api/asset_card", methods=["POST"])
+def asset_card():
+    """노드 클릭 → 장비 종합 카드. {"key": URI 또는 태그/라벨}"""
+    key = (request.get_json(silent=True) or {}).get("key", "").strip()
+    if not key:
+        return jsonify({"error": "key 필드가 비었습니다."}), 400
+    card = engine.asset_card(key)
+    if not card:
+        return jsonify({"error": f"'{key}'에 해당하는 장비를 찾지 못했습니다."}), 404
+    return jsonify(card)
+
+
 @app.route("/api/query", methods=["POST"])
 def query():
     q = (request.get_json(silent=True) or {}).get("question", "").strip()
